@@ -1,11 +1,66 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SectionHeading } from './SectionHeading';
 import { portfolioData } from '../data/portfolioData';
-import { ExternalLink, CheckCircle2, Wifi, WifiOff, RefreshCw, Flame } from 'lucide-react';
+import { ExternalLink, CheckCircle2, Wifi, WifiOff, RefreshCw, Flame, TrendingUp } from 'lucide-react';
 
 const CACHE_KEY = 'lc_problems_solved';
 const CACHE_TIMESTAMP_KEY = 'lc_problems_solved_at';
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const AUTO_REFRESH_MS = 30 * 60 * 1000; // auto-refresh interval
+
+/* ─── Multi-endpoint fetch with fallback ─────────────────────────── */
+async function tryFetch(url, signal, selector) {
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const count = selector(data);
+  if (typeof count !== 'number' || isNaN(count)) throw new Error('No count');
+  return count;
+}
+
+async function fetchFromLeetCode(username, signal) {
+  const ENDPOINTS = [
+    {
+      url: `https://alfa-leetcode-api.onrender.com/${username}/solved`,
+      sel: (d) => d.solvedProblem ?? d.totalSolved ?? null,
+    },
+    {
+      url: `https://leetcode-stats-api.herokuapp.com/${username}`,
+      sel: (d) => d.totalSolved ?? null,
+    },
+  ];
+  for (const ep of ENDPOINTS) {
+    try {
+      const count = await tryFetch(ep.url, signal, ep.sel);
+      return count;
+    } catch (_) {
+      // try next
+    }
+  }
+  // GraphQL direct (last resort)
+  try {
+    const res = await fetch('https://leetcode.com/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: `query ($username: String!) {
+          matchedUser(username: $username) {
+            submitStats { acSubmissionNum { difficulty count } }
+          }
+        }`,
+        variables: { username },
+      }),
+      signal,
+    });
+    if (res.ok) {
+      const json = await res.json();
+      const arr = json?.data?.matchedUser?.submitStats?.acSubmissionNum;
+      const allEntry = arr?.find((e) => e.difficulty === 'All');
+      if (typeof allEntry?.count === 'number') return allEntry.count;
+    }
+  } catch (_) {}
+  throw new Error('All endpoints failed');
+}
 
 function getCached() {
   try {
@@ -36,17 +91,19 @@ function formatRelativeTime(ts) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+/* ─── Component ─────────────────────────────────────────────────── */
 export const DSA = () => {
   const { dsa } = portfolioData;
 
   const [problemCount, setProblemCount] = useState(null);
   // 'loading' | 'live' | 'cached' | 'offline' | 'error'
   const [status, setStatus] = useState('loading');
-  const [isOnline, setIsOnline] = useState(true); // default true, updated in useEffect
+  const [isOnline, setIsOnline] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const autoRefreshRef = useRef(null);
 
-  const fetchLeetCode = useCallback(async () => {
-    // Check online status inside callback (avoid accessing navigator at render time)
+  const fetchLeetCode = useCallback(async ({ manual = false } = {}) => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       const cached = getCached();
       if (cached) {
@@ -59,26 +116,19 @@ export const DSA = () => {
       return;
     }
 
-    setStatus('loading');
+    if (!manual) setStatus('loading');
+    if (manual) setIsRefreshing(true);
+
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), 10000);
+
     try {
-      const res = await fetch(
-        `https://alfa-leetcode-api.onrender.com/${dsa.leetcodeUsername}/solved`,
-        { signal: controller.signal }
-      );
+      const count = await fetchFromLeetCode(dsa.leetcodeUsername, controller.signal);
       clearTimeout(timer);
-      if (!res.ok) throw new Error('API error');
-      const data = await res.json();
-      const count = data.solvedProblem ?? data.totalSolved ?? null;
-      if (typeof count === 'number') {
-        setCache(count);
-        setProblemCount(count);
-        setLastUpdated(Date.now());
-        setStatus('live');
-      } else {
-        throw new Error('Unexpected response shape');
-      }
+      setCache(count);
+      setProblemCount(count);
+      setLastUpdated(Date.now());
+      setStatus('live');
     } catch (_) {
       clearTimeout(timer);
       const cached = getCached();
@@ -89,6 +139,8 @@ export const DSA = () => {
       } else {
         setStatus('error');
       }
+    } finally {
+      setIsRefreshing(false);
     }
   }, [dsa.leetcodeUsername]);
 
@@ -112,7 +164,17 @@ export const DSA = () => {
     }
   }, [fetchLeetCode]);
 
-  // Online / offline listeners
+  /* ── Auto-refresh every 30 min when online ── */
+  useEffect(() => {
+    autoRefreshRef.current = setInterval(() => {
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        fetchLeetCode();
+      }
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(autoRefreshRef.current);
+  }, [fetchLeetCode]);
+
+  /* ── Online / offline listeners ── */
   useEffect(() => {
     const onOnline = () => {
       setIsOnline(true);
@@ -137,7 +199,7 @@ export const DSA = () => {
     };
   }, [fetchLeetCode]);
 
-  // Status badge config — defined as a function to avoid JSX-in-object issues
+  /* ── Status badge config ── */
   function getStatusBadge() {
     switch (status) {
       case 'live':
@@ -210,46 +272,64 @@ export const DSA = () => {
             </div>
 
             {/* Problems Solved Counter */}
-            <div className="rounded-xl bg-gradient-to-br from-indigo-50 to-violet-50 dark:from-indigo-950/40 dark:to-violet-950/30 border border-indigo-100 dark:border-indigo-900/60 p-4 text-center">
+            <div className="rounded-xl overflow-hidden border border-indigo-100 dark:border-indigo-900/60 bg-gradient-to-br from-indigo-50 via-violet-50 to-purple-50 dark:from-indigo-950/50 dark:via-violet-950/40 dark:to-purple-950/30">
               {status === 'loading' && problemCount === null ? (
-                <div className="flex flex-col items-center gap-2 py-1">
+                <div className="flex flex-col items-center gap-2 py-6">
                   <RefreshCw className="w-6 h-6 text-indigo-400 animate-spin" />
                   <p className="text-xs text-slate-500 dark:text-slate-400">Fetching from LeetCode…</p>
                 </div>
               ) : status === 'offline' && problemCount === null ? (
-                <div className="flex flex-col items-center gap-2 py-1">
+                <div className="flex flex-col items-center gap-2 py-6">
                   <WifiOff className="w-6 h-6 text-slate-400" />
                   <p className="text-xs text-slate-500 dark:text-slate-400">No data available offline</p>
                 </div>
               ) : (
-                <>
+                <div className="p-4 text-center">
                   <div className="flex items-center justify-center gap-2 mb-1">
-                    <Flame className="w-5 h-5 text-orange-400" />
-                    <span className="text-3xl sm:text-4xl font-black text-indigo-600 dark:text-indigo-400 font-mono tabular-nums">
+                    <Flame className="w-6 h-6 text-orange-400 drop-shadow-sm" />
+                    <span className="text-4xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600 dark:from-indigo-400 dark:to-violet-400 font-mono tabular-nums leading-none">
                       {problemCount ?? '—'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1">
                     Problems Solved on LeetCode
                   </p>
-                  {lastUpdated && (
-                    <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
-                      {status === 'cached' ? 'cached · ' : 'updated · '}
-                      {formatRelativeTime(lastUpdated)}
-                      {status === 'cached' && isOnline && (
-                        <button
-                          type="button"
-                          onClick={fetchLeetCode}
-                          className="ml-1.5 text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 underline underline-offset-2 transition-colors"
-                        >
-                          refresh
-                        </button>
-                      )}
+
+                  {/* Refresh row */}
+                  <div className="mt-2 flex items-center justify-center gap-1.5">
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                      {lastUpdated
+                        ? `${status === 'cached' ? 'cached' : 'updated'} · ${formatRelativeTime(lastUpdated)}`
+                        : ''}
                     </p>
-                  )}
-                </>
+                    {isOnline && (
+                      <button
+                        type="button"
+                        onClick={() => fetchLeetCode({ manual: true })}
+                        disabled={isRefreshing}
+                        title="Refresh now"
+                        className="inline-flex items-center gap-0.5 text-[10px] text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        <span>refresh</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Difficulty pills */}
+                  <div className="mt-3 flex gap-1 justify-center text-[9px] font-mono font-semibold">
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">Easy</span>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">Medium</span>
+                    <span className="px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800">Hard</span>
+                  </div>
+                </div>
               )}
             </div>
+
+            {/* Auto-refresh notice */}
+            <p className="text-[9px] text-slate-400 dark:text-slate-600 font-mono text-center -mt-2">
+              auto-refreshes every 30 min when online
+            </p>
 
             <a
               href={dsa.leetcodeProfile}
@@ -264,9 +344,12 @@ export const DSA = () => {
 
           {/* DSA Topic Badges */}
           <div className="md:col-span-2 p-6 sm:p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm dark:shadow-none ring-1 ring-slate-100 dark:ring-transparent">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono mb-4">
-              Core Algorithmic Topics Covered
-            </h4>
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp className="w-3.5 h-3.5 text-indigo-500" />
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono">
+                Core Algorithmic Topics Covered
+              </h4>
+            </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               {dsa.topics.map((topic, idx) => (

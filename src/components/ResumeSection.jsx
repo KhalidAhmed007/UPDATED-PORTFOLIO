@@ -16,7 +16,7 @@ export const ResumeSection = () => {
   return (
     <section id="resume" className="py-16 sm:py-20 bg-slate-100/70 dark:bg-slate-900/40 border-t border-slate-200 dark:border-slate-800">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        
+
         <SectionHeading
           tag="Curriculum Vitae"
           title="Resume & Professional Background"
@@ -25,7 +25,7 @@ export const ResumeSection = () => {
 
         {/* Paper-styled Technical Resume Presentation Card */}
         <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-md overflow-hidden">
-          
+
           {/* Resume Header Bar */}
           <div className="p-6 sm:p-8 bg-slate-50 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -73,14 +73,14 @@ export const ResumeSection = () => {
 
           {/* Resume Body Structure */}
           <div className="p-6 sm:p-8 space-y-8 text-xs sm:text-sm">
-            
+
             {/* Professional Summary */}
             <div>
               <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-2 border-b border-slate-200 dark:border-slate-800 pb-1">
                 Professional Summary
               </h4>
               <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
-                Software Engineering candidate with strong foundations in Java, Data Structures & Algorithms, and Object-Oriented Programming, having solved 140+ problems in Java on LeetCode. Experienced in backend development using Node.js and Express.js, REST API design, JWT authentication, and database engineering with PostgreSQL and MongoDB. Focused on clean software engineering practices, cloud containerization, and shipping full-stack systems end-to-end to production.
+                Software Engineering candidate with strong foundations in Java, Data Structures & Algorithms, and Object-Oriented Programming, having solved 160+ problems in Java on LeetCode. Experienced in backend development using Node.js and Express.js, REST API design, JWT authentication, and database engineering with PostgreSQL and MongoDB. Focused on clean software engineering practices, cloud containerization, and shipping full-stack systems end-to-end to production.
               </p>
             </div>
 
